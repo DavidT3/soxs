@@ -98,6 +98,7 @@ class SpatialARF(object):
             r = getattr(rfilter, region_type)(*region_args)
             inside_reg = r.inside(x_coord, y_coord)
             reg_ids[inside_reg] = reg_ind
+
         return reg_ids
 
     def interpolate_area(self, energy, arf_ind):
@@ -105,12 +106,15 @@ class SpatialARF(object):
         Interpolate the effective area to the energies
         provided  by the supplied *energy* array.
         """
-        # TODO I wonder if this could be made any faster?
-        e_area = []
-        for event_ind, en in enumerate(energy):
-            valid_arf = self.eff_areas[arf_ind[event_ind], :]
-            e_area.append(np.interp(en, self.emid, valid_arf, left=0.0, right=0.0))
-        return u.Quantity(e_area, "cm**2")
+        unique_arf_inds = np.unique(arf_ind)
+        e_area = np.zeros((1, len(energy)))
+        for a_ind in unique_arf_inds:
+            if a_ind != -1:
+                rel_inds = np.where(arf_ind == a_ind)[0]
+                rel_energies = energy[rel_inds]
+                e_area[0, rel_inds] = np.interp(rel_energies, self.emid, self.eff_areas[a_ind, :], left=0.0, right=0.0)
+
+        return u.Quantity(list(e_area[0, :]), "cm**2")
 
     def detect_events(self, events, exp_time, flux, refband, prng=None):
         """
