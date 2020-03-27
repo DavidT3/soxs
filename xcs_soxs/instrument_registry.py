@@ -5,8 +5,8 @@ from xcs_soxs.utils import mylog, parse_value, \
 import os
 from copy import deepcopy
 
-# The Instrument Registry
 
+# The Instrument Registry
 class InstrumentRegistry(object):
     def __init__(self):
         self.dep_map = {}
@@ -355,10 +355,10 @@ def add_instrument_to_registry(inst_spec):
     # Don't check things we don't need
     if "dep_name" in my_keys:
         my_keys.remove("dep_name")
-    if my_keys != default_set:
-        missing = default_set.difference(my_keys)
+    set_diff = default_set.difference(my_keys)
+    if my_keys != default_set and len(set_diff) != 0:
         raise RuntimeError("One or more items is missing from the instrument specification!\n"
-                           "Items needed: %s" % missing)
+                           "Items needed: %s" % set_diff)
     instrument_registry[name] = inst
     mylog.debug("The %s instrument specification has been added to the instrument registry." % name)
     return name
