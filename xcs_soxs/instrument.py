@@ -14,6 +14,8 @@ from xcs_soxs.instrument_registry import instrument_registry
 from six import string_types
 from tqdm import tqdm
 import pyregion._region_filter as rfilter
+from time import time
+from subprocess import PIPE, call
 
 
 def get_response_path(fn):
@@ -108,6 +110,7 @@ class SpatialARF(object):
         """
         unique_arf_inds = np.unique(arf_ind)
         e_area = np.zeros((1, len(energy)))
+
         for a_ind in unique_arf_inds:
             if a_ind != -1:
                 rel_inds = np.where(arf_ind == a_ind)[0]
@@ -148,8 +151,14 @@ class SpatialARF(object):
         if energy.size == 0:
             return events
 
+        start = time()
         which_arfs = self.find_response_region(events["cx"], events["cy"])
+        stop = time()
+        print("which_arfs took {}s".format(stop-start))
+        start = time()
         earea = self.interpolate_area(energy, which_arfs).value
+        stop = time()
+        print("area interpolation took {}s".format(stop-start))
         idxs = np.logical_and(energy >= refband[0], energy <= refband[1])
         rate = flux/(energy[idxs].sum()*erg_per_keV)*earea[idxs].sum()
         n_ph = prng.poisson(lam=rate*exp_time)
@@ -596,18 +605,40 @@ def generate_events(input_events, exp_time, instrument, sky_center, no_dither=Fa
     """
     import pyregion._region_filter as rfilter
 
-    def pixel_evts(sky_evts):
+    def pixel_evts(sky_evts, inst_name, external, ccf, expmap):
         mylog.info("Pixeling events.")
 
-        # Convert RA, Dec to pixel coordinates
-        x_pix_coord, y_pix_coord = w.wcs_world2pix(sky_evts["ra"], sky_evts["dec"], 1)
-        x_pix_coord -= event_params["pix_center"][0]
-        y_pix_coord -= event_params["pix_center"][1]
+        if external and "xmm" in inst_name:
+            ra_col = pyfits.Column(name='RA', array=sky_evts["ra"], format='D')
+            dec_col = pyfits.Column(name='DEC', array=sky_evts["dec"], format='D')
+            chip_table = pyfits.BinTableHDU.from_columns([ra_col, dec_col])
+            chip_table.name = "EVENTS"
+            # chip_table.header["DATE"] = date
+            chip_table.writeto("temp_events.fits", overwrite=True)
 
-        # Rotate physical coordinates to detector coordinates
-        det_rot = np.dot(rot_mat, np.array([x_pix_coord, y_pix_coord]))
-        sky_evts["detx"] = det_rot[0, :] + event_params["aimpt_coords"][0]
-        sky_evts["dety"] = det_rot[1, :] + event_params["aimpt_coords"][1]
+            os.environ["SAS_CCF"] = get_response_path(ccf)
+            call("esky2det datastyle=set intab=temp_events.fits calinfostyle=set "
+                 "calinfoset={d} outunit=det".format(d=get_response_path(expmap)), stdout=PIPE, stdin=PIPE, stderr=PIPE,
+                 shell=True)
+            with pyfits.open("temp_events.fits") as temp:
+                sky_evts["detx"] = temp["EVENTS"].data["DETX"]
+                detx_nan = np.isnan(sky_evts["detx"])
+                sky_evts["dety"] = temp["EVENTS"].data["DETY"]
+            for evts_key in sky_evts:
+                sky_evts[evts_key] = sky_evts[evts_key][~detx_nan]
+            os.remove("temp_events.fits")
+        elif external and "xmm" not in inst_name.lower():
+            raise NotImplementedError("Using external coordinate conversion currently only supports XMM instruments")
+        elif not external:
+            # Convert RA, Dec to pixel coordinates
+            x_pix_coord, y_pix_coord = w.wcs_world2pix(sky_evts["ra"], sky_evts["dec"], 1)
+            x_pix_coord -= event_params["pix_center"][0]
+            y_pix_coord -= event_params["pix_center"][1]
+
+            # Rotate physical coordinates to detector coordinates
+            det_rot = np.dot(rot_mat, np.array([x_pix_coord, y_pix_coord]))
+            sky_evts["detx"] = det_rot[0, :] + event_params["aimpt_coords"][0]
+            sky_evts["dety"] = det_rot[1, :] + event_params["aimpt_coords"][1]
 
         # Convert detector coordinate to "chip coordinates", needed to use the region filters for the different chips
         sky_evts["cx"] = np.trunc(sky_evts["detx"]) + 0.5 * np.sign(sky_evts["detx"])
@@ -655,7 +686,6 @@ def generate_events(input_events, exp_time, instrument, sky_center, no_dither=Fa
             rmf_file = get_response_path(instrument_spec["rmf"])
             arf = SpatialARF(arf_files, instrument_spec["response_regions"])
             rmf = RedistributionMatrixFile(rmf_file)
-
     elif instrument_spec["response_regions"] is not None:
         raise RuntimeError("Instrument {i} response_regions entry "
                            "should either be None or a list".format(i=instrument_spec["name"]))
@@ -664,6 +694,11 @@ def generate_events(input_events, exp_time, instrument, sky_center, no_dither=Fa
         rmf_file = get_response_path(instrument_spec["rmf"])
         arf = AuxiliaryResponseFile(arf_file)
         rmf = RedistributionMatrixFile(rmf_file)
+
+    if not isinstance(instrument_spec["external_coord_conv"], bool):
+        raise TypeError("external_coord_conv must be boolean")
+    elif instrument_spec["external_coord_conv"] and instrument_spec["expmap"] is None:
+        raise TypeError("If using external coordinate conversion, expmap entry cannot be None")
 
     nx = instrument_spec["num_pixels"]
     plate_scale = instrument_spec["fov"]/nx/60.  # arcmin to deg
@@ -721,9 +756,11 @@ def generate_events(input_events, exp_time, instrument, sky_center, no_dither=Fa
         if instrument_spec["response_regions"] is None:
             mylog.info("Applying energy-dependent effective area from %s" % os.path.split(arf.filename)[-1])
             events = arf.detect_events(evts, exp_time, parameters["flux"][i], refband, prng=prng)
-            events = pixel_evts(events)
+            events = pixel_evts(events, instrument_spec["name"], instrument_spec["external_coord_conv"],
+                                instrument_spec["ccf"], instrument_spec["expmap"])
         else:
-            evts = pixel_evts(evts)
+            evts = pixel_evts(evts, instrument_spec["name"], instrument_spec["external_coord_conv"],
+                              instrument_spec["ccf"], instrument_spec["expmap"])
             mylog.info("Applying {i}'s position and energy-dependent effective area".format(i=instrument_spec["name"]))
             events = arf.detect_events(evts, exp_time, parameters["flux"][i], refband, prng=prng)
 
@@ -734,21 +771,8 @@ def generate_events(input_events, exp_time, instrument, sky_center, no_dither=Fa
         else:
             # Step 2: Apply dithering and PSF. Clip events that don't fall within the detection region.
 
-            # Convert RA, Dec to pixel coordinates
-            xpix, ypix = w.wcs_world2pix(events["ra"], events["dec"], 1)
-
-            xpix -= event_params["pix_center"][0]
-            ypix -= event_params["pix_center"][1]
-
-            events.pop("ra")
-            events.pop("dec")
-            n_evt = xpix.size
-
-            # Rotate physical coordinates to detector coordinates
-
-            det = np.dot(rot_mat, np.array([xpix, ypix]))
-            detx = det[0, :] + event_params["aimpt_coords"][0]
-            dety = det[1, :] + event_params["aimpt_coords"][1]
+            detx = events["detx"]
+            dety = events["dety"]
 
             # Add times to events
             events['time'] = prng.uniform(size=n_evt, low=0.0,

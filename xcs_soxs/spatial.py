@@ -5,6 +5,7 @@ from xcs_soxs.utils import parse_prng, parse_value, \
 import astropy.units as u
 import astropy.wcs as pywcs
 
+
 def construct_wcs(ra0, dec0):
     w = pywcs.WCS(naxis=2)
     w.wcs.crval = [ra0, dec0]
@@ -13,6 +14,7 @@ def construct_wcs(ra0, dec0):
     w.wcs.ctype = ["RA---TAN","DEC--TAN"]
     w.wcs.cunit = ["deg"]*2
     return w
+
 
 def generate_radial_events(num_events, func, prng, ellipticity=1.0):
     rbins = np.linspace(0.0, 3000.0, 100000)
@@ -25,9 +27,11 @@ def generate_radial_events(num_events, func, prng, ellipticity=1.0):
     y = radius*np.sin(theta)*ellipticity
     return x, y
 
+
 def rotate_xy(theta, x, y):
     coords = np.dot(get_rot_mat(theta), np.array([x, y]))
     return coords
+
 
 class SpatialModel(object):
     def __init__(self, ra0, dec0):
@@ -58,6 +62,7 @@ class SpatialModel(object):
         ra, dec = self.w.wcs_pix2world(x, y, 1)
         return u.Quantity(ra, "deg"), u.Quantity(dec, "deg")
 
+
 class PointSourceModel(SpatialModel):
     """
     A model for positions of photons emanating from 
@@ -75,7 +80,8 @@ class PointSourceModel(SpatialModel):
 
     def _generate_coords(self, num_events, prng):
         return (np.zeros(num_events),)*2
- 
+
+
 class RadialFunctionModel(SpatialModel):
     """
     A model for positions of photons using a generic 
@@ -117,6 +123,7 @@ class RadialFunctionModel(SpatialModel):
         coords = rotate_xy(self.theta, x, y)
         return coords[0,:], coords[1,:]
 
+
 class RadialArrayModel(RadialFunctionModel):
     """
     Create positions for photons using a table of radii and 
@@ -148,6 +155,7 @@ class RadialArrayModel(RadialFunctionModel):
         func = lambda rr: np.interp(rr, r, S_r, left=0.0, right=0.0)
         super(RadialArrayModel, self).__init__(ra0, dec0, func, theta=theta, 
                                                ellipticity=ellipticity)
+
 
 class RadialFileModel(RadialArrayModel):
     """
@@ -181,6 +189,7 @@ class RadialFileModel(RadialArrayModel):
         super(RadialFileModel, self).__init__(ra0, dec0, r, S_r, theta=theta, 
                                               ellipticity=ellipticity)
 
+
 class BetaModel(RadialFunctionModel):
     """
     A model for positions of photons with a beta-model shape.
@@ -213,6 +222,7 @@ class BetaModel(RadialFunctionModel):
         func = lambda r: (1.0+(r/r_c)**2)**(-3*beta+0.5)
         super(BetaModel, self).__init__(ra0, dec0, func, theta=theta, 
                                         ellipticity=ellipticity)
+
 
 class AnnulusModel(RadialFunctionModel):
     """
@@ -254,6 +264,7 @@ class AnnulusModel(RadialFunctionModel):
                                            theta=theta,
                                            ellipticity=ellipticity)
 
+
 class RectangleModel(SpatialModel):
     """
     A model for positions of photons within a rectangle 
@@ -284,6 +295,7 @@ class RectangleModel(SpatialModel):
         y = prng.uniform(low=-0.5*self.height, high=0.5*self.height, size=num_events)
         coords = rotate_xy(self.theta, x, y)
         return coords[0,:], coords[1,:]
+
 
 class FillFOVModel(RectangleModel):
     """

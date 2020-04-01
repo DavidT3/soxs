@@ -64,6 +64,8 @@ instrument_registry["lynx_hdxi"] = {"name": "lynx_hdxi",
                                     "focal_length": 10.0,
                                     "dither": True,
                                     "psf": ["gaussian", 0.5],
+                                    "external_coord_conv": False,
+                                    "expmap": None,
                                     "imaging": True,
                                     "grating": False,
                                     "dep_name": "hdxi"}
@@ -82,6 +84,8 @@ instrument_registry["lynx_lxm"] = {"name": "lynx_lxm",
                                    "focal_length": 10.0,
                                    "dither": True,
                                    "psf": ["gaussian", 0.5],
+                                   "external_coord_conv": False,
+                                   "expmap": None,
                                    "imaging": True,
                                    "grating": False,
                                    "dep_name": "mucal"}
@@ -98,6 +102,8 @@ instrument_registry["lynx_lxm_enh"] = {"name": "lynx_lxm_enh",
                                        "focal_length": 10.0,
                                        "dither": True,
                                        "psf": ["gaussian", 0.5],
+                                       "external_coord_conv": False,
+                                       "expmap": None,
                                        "imaging": True,
                                        "grating": False}
 
@@ -113,6 +119,8 @@ instrument_registry["lynx_lxm_ultra"] = {"name": "lynx_lxm_ultra",
                                          "focal_length": 10.0,
                                          "dither": True,
                                          "psf": ["gaussian", 0.5],
+                                         "external_coord_conv": False,
+                                         "expmap": None,
                                          "imaging": True,
                                          "grating": False}
 
@@ -146,6 +154,8 @@ instrument_registry["athena_wfi"] = {"name": "athena_wfi",
                                      "focal_length": 12.0,
                                      "dither": False,
                                      "psf": ["gaussian", 5.0],
+                                     "external_coord_conv": False,
+                                     "expmap": None,
                                      "imaging": True,
                                      "grating": False}
 
@@ -165,6 +175,8 @@ instrument_registry["athena_xifu"] = {"name": "athena_xifu",
                                       "focal_length": 12.0,
                                       "dither": False,
                                       "psf": ["gaussian", 5.0],
+                                      "external_coord_conv": False,
+                                      "expmap": None,
                                       "imaging": True,
                                       "grating": False}
 
@@ -187,6 +199,8 @@ for cycle in [0, 20]:
                                            ["Box", -523, 523, 1024, 1024],
                                            ["Box", 523, 523, 1024, 1024]],
                                  "psf": ["gaussian", 0.5],
+                                 "external_coord_conv": False,
+                                 "expmap": None,
                                  "focal_length": 10.0,
                                  "dither": True,
                                  "imaging": True,
@@ -214,6 +228,8 @@ for cycle in [0, 20]:
                                            ["Box", 1563, 0, 1024, 1024],
                                            ["Box", 2605, 0, 1024, 1024]],
                                  "psf": ["gaussian", 0.5],
+                                 "external_coord_conv": False,
+                                 "expmap": None,
                                  "focal_length": 10.0,
                                  "dither": True,
                                  "imaging": True,
@@ -256,6 +272,8 @@ instrument_registry["xrism_resolve"] = {"name": "xrism_resolve",
                                         "focal_length": 5.6,
                                         "dither": False,
                                         "psf": ["gaussian", 72.0],
+                                        "external_coord_conv": False,
+                                        "expmap": None,
                                         "imaging": True,
                                         "grating": False,
                                         "dep_name": "hitomi_sxs"}
@@ -274,6 +292,8 @@ instrument_registry["axis"] = {"name": "axis",
                                "focal_length": 9.5,
                                "dither": False,
                                "psf": ["gaussian", 0.3],
+                               "external_coord_conv": False,
+                               "expmap": None,
                                "imaging": True,
                                "grating": False}
 
@@ -348,7 +368,7 @@ def add_instrument_to_registry(inst_spec):
             inst["aimpt_coords"] = [0.0, 0.0]
         default_set = {"name", "arf", "rmf", "response_regions", "bkgnd", "fov", "chips",
                        "aimpt_coords", "focal_length", "num_pixels",
-                       "dither", "psf", "imaging", "grating"}
+                       "dither", "psf", "imaging", "grating", "external_coord_conv", "expmap"}
     else:
         default_set = {"name", "arf", "rmf", "bkgnd", "focal_length", "imaging", "grating"}
     my_keys = set(inst.keys())
