@@ -800,7 +800,7 @@ def generate_events(input_events, exp_time, instrument, sky_center, no_dither=Fa
                     en_bin_bounds = np.arange(0, en_step_num+1)*0.5
                     en_bin_mids = ((en_bin_bounds[:-1]+0.25)*1000).astype(int).astype(str)
                     psf_name = "psf_{}.fits".format(datetime.today().timestamp())
-                    psf_cmd = "psfgen image={i} energy='{el}' coordtype=EQPOS x={ra} y={dec} xsize=200 ysize=200 " \
+                    psf_cmd = "psfgen image={i} energy='{el}' coordtype=EQPOS x={ra} y={dec} xsize=400 ysize=400 " \
                               "level=ELLBETA output={n}".format(i=instrument_spec["og_image"], el=' '.join(en_bin_mids),
                                                                 ra=av_ra, dec=av_dec, n=psf_name)
 
