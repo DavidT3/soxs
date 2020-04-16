@@ -2,7 +2,6 @@ import os
 from collections import defaultdict
 from datetime import datetime
 from subprocess import PIPE, call
-from time import time
 
 import astropy.io.fits as pyfits
 import astropy.units as u
@@ -100,9 +99,14 @@ class SpatialARF(object):
         num_evts = x_coord.shape[0]
         reg_ids = -np.ones(num_evts, dtype='int')
         for reg_ind, reg in enumerate(self.response_regions):
-            region_type, region_args = (reg[0], reg[1:])
-            r = getattr(rfilter, region_type)(*region_args)
-            inside_reg = r.inside(x_coord, y_coord)
+            if reg[0] == "Box":
+                inside_reg = np.logical_and.reduce((x_coord >= (reg[1] - (reg[3]/2)), x_coord <= (reg[1] + (reg[3]/2)),
+                                                    y_coord >= (reg[2] - (reg[4]/2)), y_coord <= (reg[2] + (reg[4]/2))))
+            else:
+                region_type, region_args = (reg[0], reg[1:])
+                r = getattr(rfilter, region_type)(*region_args)
+                inside_reg = r.inside(x_coord, y_coord)
+
             reg_ids[inside_reg] = reg_ind
 
         return reg_ids
@@ -155,14 +159,8 @@ class SpatialARF(object):
         if energy.size == 0:
             return events
 
-        start = time()
         which_arfs = self.find_response_region(events["cx"], events["cy"])
-        stop = time()
-        print("which_arfs took {}s".format(stop-start))
-        start = time()
         earea = self.interpolate_area(energy, which_arfs).value
-        stop = time()
-        print("area interpolation took {}s".format(stop-start))
         idxs = np.logical_and(energy >= refband[0], energy <= refband[1])
         rate = flux/(energy[idxs].sum()*erg_per_keV)*earea[idxs].sum()
         n_ph = prng.poisson(lam=rate*exp_time)
@@ -617,19 +615,20 @@ def generate_events(input_events, exp_time, instrument, sky_center, no_dither=Fa
             chip_table = pyfits.BinTableHDU.from_columns([ra_col, dec_col])
             chip_table.name = "EVENTS"
             # chip_table.header["DATE"] = date
-            chip_table.writeto("temp_events.fits", overwrite=True)
+            temp_evts_name = "temp_events_{}.fits".format(datetime.today().timestamp())
+            chip_table.writeto(temp_evts_name, overwrite=True)
 
             os.environ["SAS_CCF"] = get_response_path(ccf)
-            call("esky2det datastyle=set intab=temp_events.fits calinfostyle=set "
-                 "calinfoset={d} outunit=det".format(d=get_response_path(expmap)), stdout=PIPE, stdin=PIPE, stderr=PIPE,
-                 shell=True)
-            with pyfits.open("temp_events.fits") as temp:
+            call("esky2det datastyle=set intab={n} calinfostyle=set "
+                 "calinfoset={d} outunit=det".format(d=get_response_path(expmap), n=temp_evts_name), stdout=PIPE,
+                 stdin=PIPE, stderr=PIPE, shell=True)
+            with pyfits.open(temp_evts_name) as temp:
                 sky_evts["detx"] = temp["EVENTS"].data["DETX"]
                 detx_nan = np.isnan(sky_evts["detx"])
                 sky_evts["dety"] = temp["EVENTS"].data["DETY"]
             for evts_key in sky_evts:
                 sky_evts[evts_key] = sky_evts[evts_key][~detx_nan]
-            os.remove("temp_events.fits")
+            os.remove(temp_evts_name)
         elif external and "xmm" not in inst_name.lower():
             raise NotImplementedError("Using external coordinate conversion currently only supports XMM instruments")
         elif not external:
