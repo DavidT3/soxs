@@ -1,21 +1,24 @@
-import numpy as np
-import astropy.io.fits as pyfits
-import astropy.wcs as pywcs
-import astropy.units as u
 import os
 from collections import defaultdict
+from datetime import datetime
+from subprocess import PIPE, call
+
+import astropy.io.fits as pyfits
+import astropy.units as u
+import astropy.wcs as pywcs
+import matplotlib.pyplot as plt
+import numpy as np
+import pyregion._region_filter as rfilter
+import scipy.interpolate as interpolate
+from six import string_types
+from tqdm import tqdm
 
 from xcs_soxs.constants import erg_per_keV, sigma_to_fwhm
+from xcs_soxs.events import write_event_file
+from xcs_soxs.instrument_registry import instrument_registry
 from xcs_soxs.simput import read_simput_catalog
 from xcs_soxs.utils import mylog, ensure_numpy_array, \
     parse_prng, parse_value, get_rot_mat, soxs_cfg
-from xcs_soxs.events import write_event_file
-from xcs_soxs.instrument_registry import instrument_registry
-from six import string_types
-from tqdm import tqdm
-import pyregion._region_filter as rfilter
-from time import time
-from subprocess import PIPE, call
 
 
 def get_response_path(fn):
@@ -96,9 +99,14 @@ class SpatialARF(object):
         num_evts = x_coord.shape[0]
         reg_ids = -np.ones(num_evts, dtype='int')
         for reg_ind, reg in enumerate(self.response_regions):
-            region_type, region_args = (reg[0], reg[1:])
-            r = getattr(rfilter, region_type)(*region_args)
-            inside_reg = r.inside(x_coord, y_coord)
+            if reg[0] == "Box":
+                inside_reg = np.logical_and.reduce((x_coord >= (reg[1] - (reg[3]/2)), x_coord <= (reg[1] + (reg[3]/2)),
+                                                    y_coord >= (reg[2] - (reg[4]/2)), y_coord <= (reg[2] + (reg[4]/2))))
+            else:
+                region_type, region_args = (reg[0], reg[1:])
+                r = getattr(rfilter, region_type)(*region_args)
+                inside_reg = r.inside(x_coord, y_coord)
+
             reg_ids[inside_reg] = reg_ind
 
         return reg_ids
@@ -151,14 +159,8 @@ class SpatialARF(object):
         if energy.size == 0:
             return events
 
-        start = time()
         which_arfs = self.find_response_region(events["cx"], events["cy"])
-        stop = time()
-        print("which_arfs took {}s".format(stop-start))
-        start = time()
         earea = self.interpolate_area(energy, which_arfs).value
-        stop = time()
-        print("area interpolation took {}s".format(stop-start))
         idxs = np.logical_and(energy >= refband[0], energy <= refband[1])
         rate = flux/(energy[idxs].sum()*erg_per_keV)*earea[idxs].sum()
         n_ph = prng.poisson(lam=rate*exp_time)
@@ -311,7 +313,6 @@ class AuxiliaryResponseFile(object):
         A tuple of the :class:`~matplotlib.figure.Figure` and 
         :class:`~matplotlib.axes.Axes` objects.
         """
-        import matplotlib.pyplot as plt
         if xlabel is None:
             xlabel = "E (keV)"
         if ylabel is None:
@@ -614,19 +615,20 @@ def generate_events(input_events, exp_time, instrument, sky_center, no_dither=Fa
             chip_table = pyfits.BinTableHDU.from_columns([ra_col, dec_col])
             chip_table.name = "EVENTS"
             # chip_table.header["DATE"] = date
-            chip_table.writeto("temp_events.fits", overwrite=True)
+            temp_evts_name = "temp_events_{}.fits".format(datetime.today().timestamp())
+            chip_table.writeto(temp_evts_name, overwrite=True)
 
             os.environ["SAS_CCF"] = get_response_path(ccf)
-            call("esky2det datastyle=set intab=temp_events.fits calinfostyle=set "
-                 "calinfoset={d} outunit=det".format(d=get_response_path(expmap)), stdout=PIPE, stdin=PIPE, stderr=PIPE,
-                 shell=True)
-            with pyfits.open("temp_events.fits") as temp:
+            call("esky2det datastyle=set intab={n} calinfostyle=set "
+                 "calinfoset={d} outunit=det".format(d=get_response_path(expmap), n=temp_evts_name), stdout=PIPE,
+                 stdin=PIPE, stderr=PIPE, shell=True)
+            with pyfits.open(temp_evts_name) as temp:
                 sky_evts["detx"] = temp["EVENTS"].data["DETX"]
                 detx_nan = np.isnan(sky_evts["detx"])
                 sky_evts["dety"] = temp["EVENTS"].data["DETY"]
             for evts_key in sky_evts:
                 sky_evts[evts_key] = sky_evts[evts_key][~detx_nan]
-            os.remove("temp_events.fits")
+            os.remove(temp_evts_name)
         elif external and "xmm" not in inst_name.lower():
             raise NotImplementedError("Using external coordinate conversion currently only supports XMM instruments")
         elif not external:
@@ -756,8 +758,7 @@ def generate_events(input_events, exp_time, instrument, sky_center, no_dither=Fa
         if instrument_spec["response_regions"] is None:
             mylog.info("Applying energy-dependent effective area from %s" % os.path.split(arf.filename)[-1])
             events = arf.detect_events(evts, exp_time, parameters["flux"][i], refband, prng=prng)
-            events = pixel_evts(events, instrument_spec["name"], instrument_spec["external_coord_conv"],
-                                instrument_spec["ccf"], instrument_spec["expmap"])
+            events = pixel_evts(events, instrument_spec["name"], instrument_spec["external_coord_conv"], None, None)
         else:
             evts = pixel_evts(evts, instrument_spec["name"], instrument_spec["external_coord_conv"],
                               instrument_spec["ccf"], instrument_spec["expmap"])
@@ -770,29 +771,85 @@ def generate_events(input_events, exp_time, instrument, sky_center, no_dither=Fa
             mylog.warning("No events were observed for this source!!!")
         else:
             # Step 2: Apply dithering and PSF. Clip events that don't fall within the detection region.
-
-            detx = events["detx"]
-            dety = events["dety"]
-
             # Add times to events
             events['time'] = prng.uniform(size=n_evt, low=0.0,
                                           high=event_params["exposure_time"])
 
+            detx = events["detx"]
+            dety = events["dety"]
+
             # Apply dithering
-
             x_offset, y_offset = perform_dither(events["time"], dither_dict)
-
             detx -= x_offset
             dety -= y_offset
 
             # PSF scattering of detector coordinates
-
             if instrument_spec["psf"] is not None:
                 psf_type, psf_spec = instrument_spec["psf"]
                 if psf_type == "gaussian":
                     sigma = psf_spec/sigma_to_fwhm/plate_scale_arcsec
                     detx += prng.normal(loc=0.0, scale=sigma, size=n_evt)
                     dety += prng.normal(loc=0.0, scale=sigma, size=n_evt)
+                elif psf_type.lower() == "sas":
+                    # This is a very crude way to get a central coordinate for PSF generation
+                    av_ra = events["ra"].mean()
+                    av_dec = events["dec"].mean()
+                    # PSF differs for different energies, so dividing up into chunks of 0.5keV
+                    en_step_num = np.ceil(events["energy"].max() / 0.5).astype(int)
+                    en_bin_bounds = np.arange(0, en_step_num+1)*0.5
+                    en_bin_mids = ((en_bin_bounds[:-1]+0.25)*1000).astype(int).astype(str)
+                    psf_name = "psf_{}.fits".format(datetime.today().timestamp())
+                    psf_cmd = "psfgen image={i} energy='{el}' coordtype=EQPOS x={ra} y={dec} xsize=400 ysize=400 " \
+                              "level=ELLBETA output={n}".format(i=instrument_spec["og_image"], el=' '.join(en_bin_mids),
+                                                                ra=av_ra, dec=av_dec, n=psf_name)
+
+                    os.environ["SAS_CCF"] = get_response_path(instrument_spec["ccf"])
+                    call(psf_cmd, shell=True, stdout=PIPE, stdin=PIPE, stderr=PIPE)
+
+                    evt_idx = np.arange(0, len(events["energy"]), 1).astype(int)
+                    psf_obj = pyfits.open(psf_name)
+
+                    for mid_ind, mid in enumerate(en_bin_mids):
+                        cur_psf = psf_obj[mid_ind+1].data
+                        cur_wcs = pywcs.WCS(psf_obj[mid_ind+1].header)
+                        cur_psf /= cur_psf.sum()
+                        flat_psf = cur_psf.flatten()
+                        psf_ind = np.indices(cur_psf.shape)
+                        y_lookup = psf_ind[0, :, :].flatten()
+                        y_lookup = np.append(y_lookup, y_lookup[-1])
+                        y_lookup = np.insert(y_lookup, 0, y_lookup[0])
+                        x_lookup = psf_ind[1, :, :].flatten()
+                        x_lookup = np.append(x_lookup, x_lookup[-1])
+                        x_lookup = np.insert(x_lookup, 0, x_lookup[0])
+                        psf_cdf = np.cumsum(flat_psf)
+                        psf_cdf = np.append(psf_cdf, 1)
+                        psf_cdf = np.insert(psf_cdf, 0, 0)
+
+                        bounded_events = evt_idx[(en_bin_bounds[mid_ind] <= events["energy"]) &
+                                                 (events["energy"] < en_bin_bounds[mid_ind+1])]
+                        num_to_gen = len(bounded_events)
+
+                        rand_samples = np.random.uniform(low=0, high=1, size=num_to_gen)
+                        inv_cdf = interpolate.interp1d(psf_cdf, np.arange(0, len(psf_cdf)))
+                        inv_cdf_vals = inv_cdf(rand_samples).astype(int)
+                        ys = y_lookup[inv_cdf_vals]
+                        xs = x_lookup[inv_cdf_vals]
+                        ra_samples, dec_samples = cur_wcs.all_pix2world(xs, ys, 0)
+                        ra_samples_diff = ra_samples - av_ra
+                        dec_samples_diff = dec_samples - av_dec
+
+                        events["ra"][bounded_events] += ra_samples_diff
+                        events["dec"][bounded_events] += dec_samples_diff
+                    events["x_offset_temp"] = x_offset
+                    events["y_offset_temp"] = y_offset
+                    events = pixel_evts(events, instrument_spec["name"], instrument_spec["external_coord_conv"],
+                                        instrument_spec["ccf"], instrument_spec["expmap"])
+                    n_evt = events["energy"].size
+                    detx = events["detx"]
+                    dety = events["dety"]
+                    x_offset = events["x_offset_temp"]
+                    y_offset = events["y_offset_temp"]
+                    os.remove(psf_name)
                 else:
                     raise NotImplementedError("PSF type %s not implemented!" % psf_type)
 
