@@ -804,7 +804,8 @@ def generate_events(input_events, exp_time, instrument, sky_center, no_dither=Fa
                                                                 ra=av_ra, dec=av_dec, n=psf_name)
 
                     os.environ["SAS_CCF"] = get_response_path(instrument_spec["ccf"])
-                    call(psf_cmd, shell=True, stdout=PIPE, stdin=PIPE, stderr=PIPE)
+                    with open(psf_name.split('.')[0] + ".log", 'w') as loggy:
+                        call(psf_cmd, shell=True, stdout=loggy, stdin=PIPE, stderr=loggy)
 
                     evt_idx = np.arange(0, len(events["energy"]), 1).astype(int)
                     psf_obj = pyfits.open(psf_name)
