@@ -619,9 +619,10 @@ def generate_events(input_events, exp_time, instrument, sky_center, no_dither=Fa
             chip_table.writeto(temp_evts_name, overwrite=True)
 
             os.environ["SAS_CCF"] = get_response_path(ccf)
-            call("esky2det datastyle=set intab={n} calinfostyle=set "
-                 "calinfoset={d} outunit=det".format(d=get_response_path(expmap), n=temp_evts_name), stdout=PIPE,
-                 stdin=PIPE, stderr=PIPE, shell=True)
+            with open(temp_evts_name.split('.')[0] + ".log", 'w') as conv_loggy:
+                call("esky2det datastyle=set intab={n} calinfostyle=set "
+                     "calinfoset={d} outunit=det".format(d=get_response_path(expmap), n=temp_evts_name),
+                     stdout=conv_loggy, stdin=PIPE, stderr=conv_loggy, shell=True)
             with pyfits.open(temp_evts_name) as temp:
                 sky_evts["detx"] = temp["EVENTS"].data["DETX"]
                 detx_nan = np.isnan(sky_evts["detx"])
@@ -797,7 +798,10 @@ def generate_events(input_events, exp_time, instrument, sky_center, no_dither=Fa
                     # PSF differs for different energies, so dividing up into chunks of 0.5keV
                     en_step_num = np.ceil(events["energy"].max() / 0.5).astype(int)
                     en_bin_bounds = np.arange(0, en_step_num+1)*0.5
-                    en_bin_mids = ((en_bin_bounds[:-1]+0.25)*1000).astype(int).astype(str)
+                    og_en_bin_mids = ((en_bin_bounds[:-1]+0.25)*1000).astype(int)
+                    # psfgen has an upper limit of 15000eV allowed for energy apparently
+                    en_bin_mids = [str(m) for m in og_en_bin_mids if m < 15000]
+
                     psf_name = "psf_{}.fits".format(datetime.today().timestamp())
                     psf_cmd = "psfgen image={i} energy='{el}' coordtype=EQPOS x={ra} y={dec} xsize=400 ysize=400 " \
                               "level=ELLBETA output={n}".format(i=instrument_spec["og_image"], el=' '.join(en_bin_mids),
@@ -809,8 +813,11 @@ def generate_events(input_events, exp_time, instrument, sky_center, no_dither=Fa
 
                     evt_idx = np.arange(0, len(events["energy"]), 1).astype(int)
                     psf_obj = pyfits.open(psf_name)
+                    for add_ind in range(0, len(og_en_bin_mids) - len(en_bin_mids)):
+                        print('PHOTONS OUTSIDE 15000eV SO ADDING THINGS')
+                        psf_obj.append(psf_obj[len(psf_obj)-1])
 
-                    for mid_ind, mid in enumerate(en_bin_mids):
+                    for mid_ind, mid in enumerate(og_en_bin_mids):
                         cur_psf = psf_obj[mid_ind+1].data
                         cur_wcs = pywcs.WCS(psf_obj[mid_ind+1].header)
                         cur_psf /= cur_psf.sum()
